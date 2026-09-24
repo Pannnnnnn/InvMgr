@@ -35,22 +35,46 @@ async function getUserOptional(req: NextRequest) {
   return data.user;
 }
 
+type AppMeta = { status?: string; clearance?: number };
+
+function readAppMeta(user: { app_metadata?: unknown }): AppMeta {
+  return (user.app_metadata as AppMeta | undefined) ?? {};
+}
+
 /**
- * Manager-only routes (catalog writes, stock adjustments, the AI stock-
- * intake scan). Role is read from the user's `app_metadata.role` — set via
- * the Supabase dashboard (Authentication → Users → edit user → App
- * Metadata → `{"role": "manager"}`), NOT `user_metadata`, which the user
+ * Approved-staff routes (catalog writes, stock adjustments, the AI stock-
+ * intake scan) — clearance 1 (owner) or 2 (manager), both count. Role lives
+ * in `app_metadata` (`{"status":"approved","clearance":1|2}`), set only by
+ * an owner via the /admin panel (or, for the very first owner account, the
+ * Supabase dashboard — see README) — never `user_metadata`, which the user
  * themselves can edit and so can't be trusted for authorization. Throws a
- * 401 if unauthenticated, 403 if authenticated but not a manager.
+ * 401 if unauthenticated, 403 if authenticated but not approved.
  */
 export async function requireManager(req: NextRequest): Promise<string> {
   const user = await getUserOptional(req);
   if (!user) {
     throw new ApiError(401, 'UNAUTHENTICATED', 'Missing or invalid Authorization bearer token.');
   }
-  const role = (user.app_metadata as { role?: string } | undefined)?.role;
-  if (role !== 'manager') {
-    throw new ApiError(403, 'FORBIDDEN', 'This action requires a manager account.');
+  const meta = readAppMeta(user);
+  if (meta.status !== 'approved' || (meta.clearance !== 1 && meta.clearance !== 2)) {
+    throw new ApiError(403, 'FORBIDDEN', 'This action requires an approved manager or owner account.');
+  }
+  return user.id;
+}
+
+/**
+ * Owner-only routes — clearance 1 exclusively (approving/rejecting
+ * signups, changing someone's clearance level). See requireManager() above
+ * for the shared approved-staff check.
+ */
+export async function requireOwner(req: NextRequest): Promise<string> {
+  const user = await getUserOptional(req);
+  if (!user) {
+    throw new ApiError(401, 'UNAUTHENTICATED', 'Missing or invalid Authorization bearer token.');
+  }
+  const meta = readAppMeta(user);
+  if (meta.status !== 'approved' || meta.clearance !== 1) {
+    throw new ApiError(403, 'FORBIDDEN', 'This action requires an owner (clearance 1) account.');
   }
   return user.id;
 }

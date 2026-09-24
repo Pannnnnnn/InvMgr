@@ -5,20 +5,20 @@ import { apiGet } from '@/lib/api-client';
 import type { Item } from '@/lib/checkout-types';
 import { AddItemModal } from '@/components/AddItemModal';
 import { StockAdjustModal } from '@/components/StockAdjustModal';
-import { RequireManager } from '@/components/RequireManager';
+import { RequireClearance } from '@/components/RequireClearance';
 import { StockScanModal } from '@/components/StockScanModal';
 import { useI18n } from '@/lib/i18n/context';
 
 /**
  * Real-time inventory catalog view (PRD 4.2): name, SKU, category,
  * available vs total quantity, with fast-action manual overrides for
- * breakage/loss/restocking. Manager-only (see RequireManager).
+ * breakage/loss/restocking. Manager-only (see RequireClearance).
  */
 export default function InventoryPage() {
   return (
-    <RequireManager>
+    <RequireClearance>
       <InventoryContent />
-    </RequireManager>
+    </RequireClearance>
   );
 }
 

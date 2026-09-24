@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { apiGet, apiJson, ClientApiError } from '@/lib/api-client';
 import type { TransactionResult } from '@/lib/checkout-types';
-import { RequireManager } from '@/components/RequireManager';
+import { RequireClearance } from '@/components/RequireClearance';
 import { useI18n } from '@/lib/i18n/context';
 
 type StatusFilter = '' | 'BORROWED' | 'RETURNED';
@@ -12,13 +12,13 @@ type StatusFilter = '' | 'BORROWED' | 'RETURNED';
 /**
  * Visual audit & transaction log (PRD 4.3): chronological feed with worker
  * photo thumbnail, name, items, timestamp, status — searchable by date,
- * worker name, or item type. Manager-only (see RequireManager).
+ * worker name, or item type. Manager-only (see RequireClearance).
  */
 export default function TransactionsPage() {
   return (
-    <RequireManager>
+    <RequireClearance>
       <TransactionsContent />
-    </RequireManager>
+    </RequireClearance>
   );
 }
 

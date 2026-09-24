@@ -27,7 +27,18 @@ export const env = {
     return required('GEMINI_API_KEY');
   },
   get geminiModel() {
-    return process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+    return process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  },
+  /**
+   * A cheaper/faster model for the two lightweight advisory calls
+   * (transliterateWorkerName, checkPhotoHasFace in src/lib/gemini.ts) —
+   * simple classification and a yes/no vision check, not the accuracy-
+   * critical checkout item-extraction or stock-scan paths, which stay on
+   * the full geminiModel above. Flash-Lite still supports image input and
+   * structured JSON output, at a fraction of full Flash's per-token cost.
+   */
+  get geminiLiteModel() {
+    return process.env.GEMINI_LITE_MODEL || 'gemini-3.5-flash-lite';
   },
   get signedUrlTtlSeconds() {
     const raw = process.env.SIGNED_URL_TTL_SECONDS;

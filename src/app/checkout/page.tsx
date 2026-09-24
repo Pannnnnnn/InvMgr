@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { apiForm, ClientApiError } from '@/lib/api-client';
+import { apiForm, apiJson, ClientApiError } from '@/lib/api-client';
 import type { CheckoutResponse, ManualCheckoutResponse, CartLine } from '@/lib/checkout-types';
 import { PhotoCapture } from '@/components/PhotoCapture';
 import { ConfirmationCard } from '@/components/ConfirmationCard';
@@ -23,6 +23,8 @@ export default function CheckoutPage() {
   const [tab, setTab] = useState<Tab>('pick');
   const [photo, setPhoto] = useState<File | null>(null);
   const [workerName, setWorkerName] = useState('');
+  const [nameSuggestion, setNameSuggestion] = useState<string | null>(null);
+  const [translating, setTranslating] = useState(false);
   const [cart, setCart] = useState<CartLine[]>([]);
   const [text, setText] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -34,6 +36,43 @@ export default function CheckoutPage() {
     setConfirmed(null);
     setClarification(null);
     setError(null);
+  }
+
+  /**
+   * Suggests a readable Thai transliteration for a Burmese worker name
+   * (script or romanized) — many floor workers are Burmese migrant workers,
+   * and the operator often can't read what they wrote or typed. Advisory
+   * only: shows a suggestion chip the operator taps to accept; never
+   * replaces what they typed automatically, and any failure here is
+   * silent — never blocks checkout (PRD 7).
+   */
+  async function translateWorkerName() {
+    const name = workerName.trim();
+    if (!name) return;
+    setTranslating(true);
+    setNameSuggestion(null);
+    try {
+      const result = await apiJson<{ is_burmese: boolean; thai_transliteration: string | null }>(
+        '/api/checkout/translate-name',
+        'POST',
+        { name }
+      );
+      setNameSuggestion(result.is_burmese ? result.thai_transliteration : null);
+    } catch (err) {
+      // Advisory only — never block checkout on this, but DO log it so
+      // it's visible in devtools rather than silently vanishing.
+      // eslint-disable-next-line no-console
+      console.error('Name translation failed (non-blocking):', err);
+      setNameSuggestion(null);
+    } finally {
+      setTranslating(false);
+    }
+  }
+
+  function acceptNameSuggestion() {
+    if (!nameSuggestion) return;
+    setWorkerName(nameSuggestion);
+    setNameSuggestion(null);
   }
 
   async function submitPick() {
@@ -103,19 +142,42 @@ export default function CheckoutPage() {
         </div>
       ) : (
         <div className="card space-y-4">
-          <PhotoCapture value={photo} onChange={setPhoto} label={t('checkout.workerPhoto')} />
+          <PhotoCapture value={photo} onChange={setPhoto} label={t('checkout.workerPhoto')} checkFace />
 
           <div>
             <label className="field-label" htmlFor="worker-name">
               {t('checkout.workerName')}
             </label>
-            <input
-              id="worker-name"
-              className="field-input"
-              placeholder={t('checkout.workerNamePlaceholder')}
-              value={workerName}
-              onChange={(e) => setWorkerName(e.target.value)}
-            />
+            <div className="flex gap-2">
+              <input
+                id="worker-name"
+                className="field-input"
+                placeholder={t('checkout.workerNamePlaceholder')}
+                value={workerName}
+                onChange={(e) => {
+                  setWorkerName(e.target.value);
+                  setNameSuggestion(null);
+                }}
+              />
+              <button
+                type="button"
+                className="btn-secondary shrink-0 px-3 text-sm"
+                onClick={translateWorkerName}
+                disabled={!workerName.trim() || translating}
+                title={t('checkout.translateNameHint')}
+              >
+                {translating ? '…' : t('checkout.translateName')}
+              </button>
+            </div>
+            {nameSuggestion && (
+              <button
+                type="button"
+                onClick={acceptNameSuggestion}
+                className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 ring-1 ring-inset ring-brand-200 hover:bg-brand-100"
+              >
+                {t('checkout.nameSuggestionUse', { name: nameSuggestion })}
+              </button>
+            )}
           </div>
 
           <div className="flex gap-1 rounded-lg bg-slate-100 p-1">

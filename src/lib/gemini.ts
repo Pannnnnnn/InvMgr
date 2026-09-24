@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType, type ResponseSchema } from '@google/generative-ai';
 import { env } from './env';
 import { ApiError } from './http';
 
@@ -61,7 +61,7 @@ const responseSchema = {
     },
   },
   required: ['action', 'worker_name', 'worker_name_source', 'items', 'needs_clarification'],
-} as const;
+} as const as unknown as ResponseSchema;
 
 const SYSTEM_INSTRUCTION = `You are the entity-extraction step of a factory tool-room checkout agent.
 You are given a photo of a worker (optionally showing an ID badge/uniform) and a short
@@ -203,7 +203,7 @@ const stockResponseSchema = {
     },
   },
   required: ['detections'],
-} as const;
+} as const as unknown as ResponseSchema;
 
 const STOCK_SYSTEM_INSTRUCTION = `You are the stock-intake vision step of a factory tool-room inventory system.
 You are given a photo of a shelf, bin, or box of tools/equipment/parts. Identify every distinct kind of
@@ -270,4 +270,168 @@ export async function extractStockFromPhoto(params: {
         : 'LOW') as 'HIGH' | 'MEDIUM' | 'LOW',
     }))
     .filter((d) => d.name.length > 0);
+}
+
+// --- Worker name transliteration: Burmese (script or romanized) -> readable Thai ---
+// Many floor workers at Thai factories are Burmese migrant workers; the tool-room
+// operator often can't read a name typed in Burmese script, and a name typed in
+// romanized Burmese ("Aung Zaw") isn't obviously pronounceable to a Thai reader
+// either. This is a readability aid only (see checkout.workerName UI) — the
+// transliterated name simply becomes the stored worker_name if the operator
+// accepts it; no new schema, no identity matching.
+
+export type NameTransliteration = {
+  is_burmese: boolean;
+  /** Phonetic Thai-script rendering, not a meaning-translation. Null if not Burmese. */
+  thai_transliteration: string | null;
+};
+
+const nameTransliterationSchema = {
+  type: SchemaType.OBJECT,
+  properties: {
+    is_burmese: {
+      type: SchemaType.BOOLEAN,
+      description: 'True if the input is a Burmese (Myanmar) personal name, in Burmese script or romanized.',
+    },
+    thai_transliteration: {
+      type: SchemaType.STRING,
+      nullable: true,
+      description:
+        'A readable Thai-script phonetic transliteration of the name, reflecting Burmese pronunciation ' +
+        '(not a translation of meaning). Null if is_burmese is false.',
+    },
+  },
+  required: ['is_burmese', 'thai_transliteration'],
+} as const as unknown as ResponseSchema;
+
+const NAME_TRANSLITERATION_SYSTEM_INSTRUCTION = `You help a Thai factory tool-room operator read the names
+of Burmese migrant workers. You are given one short string meant to be a person's name, exactly as typed
+by the operator (it may be in Burmese/Myanmar script, romanized Burmese, Thai, or English).
+
+Decide whether it is a Burmese personal name — in Burmese script, or a romanized spelling of one (e.g.
+"Aung Zaw", "Thura", "Nilar", "Zin Mar"). If so, produce a readable Thai-script PHONETIC transliteration —
+how a Thai speaker should pronounce it — NOT a translation of its meaning (e.g. "အောင်ဇော်" / "Aung Zaw"
+should become something like "อ่อง ซอ"). Follow common Thai conventions for rendering Burmese names where
+they exist.
+
+If the name is already Thai, already English, or you cannot confidently tell it is Burmese, set
+is_burmese to false and thai_transliteration to null — do not guess.`;
+
+export async function transliterateWorkerName(name: string): Promise<NameTransliteration> {
+  const model = client().getGenerativeModel({
+    model: env.geminiLiteModel,
+    systemInstruction: NAME_TRANSLITERATION_SYSTEM_INSTRUCTION,
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: nameTransliterationSchema,
+      temperature: 0.1,
+    },
+  });
+
+  let result;
+  try {
+    result = await model.generateContent([{ text: name }]);
+  } catch (err) {
+    throw new ApiError(
+      502,
+      'AI_PROVIDER_ERROR',
+      `Gemini request failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  const raw = result.response.text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ApiError(502, 'AI_RESPONSE_UNPARSEABLE', 'Gemini returned non-JSON output.', { raw });
+  }
+
+  const p = parsed as Partial<NameTransliteration>;
+  return {
+    is_burmese: Boolean(p.is_burmese),
+    thai_transliteration:
+      typeof p.thai_transliteration === 'string' && p.thai_transliteration.trim()
+        ? p.thai_transliteration.trim()
+        : null,
+  };
+}
+
+// --- Worker photo sanity check: does this photo actually show a face? ---
+// A capture-quality check only (catching a photo of the floor, a blank wall, a
+// thumb over the lens, etc.) — explicitly NOT identity verification or facial
+// recognition against any database, which the PRD (section 8) puts out of
+// scope. Always advisory: per PRD 7 (fault tolerance), the checkout counter
+// must never be blocked by an AI call failing or disagreeing, so callers
+// should treat this as a soft warning, not a gate.
+
+export type FaceCheck = {
+  has_face: boolean;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+};
+
+const faceCheckSchema = {
+  type: SchemaType.OBJECT,
+  properties: {
+    has_face: {
+      type: SchemaType.BOOLEAN,
+      description: 'True if a human face (fully or partially visible, any angle/lighting) appears anywhere in the photo.',
+    },
+    confidence: { type: SchemaType.STRING, enum: ['HIGH', 'MEDIUM', 'LOW'] },
+  },
+  required: ['has_face', 'confidence'],
+} as const as unknown as ResponseSchema;
+
+const FACE_CHECK_SYSTEM_INSTRUCTION = `You are a quick photo-quality sanity check for a factory tool-room
+checkout camera. You are given a photo meant to capture the worker checking out equipment. Report only
+whether a human face is visible anywhere in the photo (fully or partially, any angle or lighting) — this
+is purely a capture-quality check (catching e.g. a photo of the floor, a blank wall, or a hand instead of
+the worker), NOT identity verification or facial recognition. Never identify, describe, or guess who the
+person is — just whether a face is present.`;
+
+export async function checkPhotoHasFace(params: {
+  imageBytes: Uint8Array;
+  imageMimeType: string;
+}): Promise<FaceCheck> {
+  const { imageBytes, imageMimeType } = params;
+
+  const model = client().getGenerativeModel({
+    model: env.geminiLiteModel,
+    systemInstruction: FACE_CHECK_SYSTEM_INSTRUCTION,
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: faceCheckSchema,
+      temperature: 0,
+    },
+  });
+
+  let result;
+  try {
+    result = await model.generateContent([
+      { inlineData: { data: Buffer.from(imageBytes).toString('base64'), mimeType: imageMimeType } },
+      { text: 'Does this photo show a human face?' },
+    ]);
+  } catch (err) {
+    throw new ApiError(
+      502,
+      'AI_PROVIDER_ERROR',
+      `Gemini request failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  const raw = result.response.text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ApiError(502, 'AI_RESPONSE_UNPARSEABLE', 'Gemini returned non-JSON output.', { raw });
+  }
+
+  const p = parsed as Partial<FaceCheck>;
+  return {
+    has_face: Boolean(p.has_face),
+    confidence: (p.confidence === 'HIGH' || p.confidence === 'MEDIUM' || p.confidence === 'LOW'
+      ? p.confidence
+      : 'LOW') as FaceCheck['confidence'],
+  };
 }

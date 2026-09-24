@@ -15,6 +15,10 @@ section 6 for the manager login/role setup.
    - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
      (Project Settings → API)
    - `GEMINI_API_KEY` (https://aistudio.google.com/apikey)
+   - `GEMINI_MODEL` / `GEMINI_LITE_MODEL` — already defaulted in code (see `src/lib/env.ts`)
+     if you don't set them; only override if Google renames/deprecates a model again
+     (watch your `npm run dev` terminal for a 404 "model no longer available" error —
+     it names the current replacement directly).
 3. Run the migrations against your project's Postgres. Either:
    - **Supabase CLI** (recommended): `supabase link` then
      `supabase db push` using the SQL files in `supabase/migrations/` (copy
@@ -58,6 +62,8 @@ npm run dev
 | `/api/transactions/[id]/return` | POST | Mark a BORROWED transaction RETURNED, restock the item |
 | `/api/transactions/manual` | POST | Tap-to-pick checkout (no Gemini call) — same atomic commit path as `/api/checkout` |
 | `/api/inventory/scan` | POST | **Manager-only.** Photo of shelf/stock → Gemini-detected items + fuzzy-matched catalog candidates. Nothing is written — see section 6. |
+| `/api/checkout/translate-name` | POST | Given a typed worker name, tells the frontend whether it looks Burmese and offers a readable Thai transliteration (suggestion only — see section 5). |
+| `/api/checkout/verify-photo` | POST | Given a photo, a quick advisory check for whether a human face is visible (capture-quality check, not identity verification — see section 5). |
 
 ### `/api/checkout` request
 
@@ -77,6 +83,12 @@ Responses (all `200`, except a successful commit which is `201`):
 - `image` (required)
 - `items` (required) — JSON string: `[{"item_id": "...", "quantity": 1}]`
 - `worker_name`, `notes` (optional)
+
+### `/api/checkout/translate-name` request
+`application/json`: `{ "name": "..." }` → `{ "is_burmese": boolean, "thai_transliteration": string | null }`.
+
+### `/api/checkout/verify-photo` request
+`multipart/form-data`: `image` (required) → `{ "has_face": boolean, "confidence": "HIGH"|"MEDIUM"|"LOW" }`.
 
 ## 4. Design notes
 
@@ -117,27 +129,37 @@ A Next.js App Router frontend sits on top of the API:
 | `/checkout` | Floor checkout: worker photo + either tap-to-pick from the catalog or describe-to-AI (text). Home page redirects here. | None — floor workers never log in (PRD 7 fault tolerance). |
 | `/inventory` | Catalog view — search, add items, manual stock overrides (restock/breakage/loss/correction), AI stock-photo scan. | **Manager only.** |
 | `/transactions` | Audit log — filter by worker/item/status/date, photo thumbnails via signed URLs, mark-returned action. | **Manager only.** |
-| `/login` | Manager sign-in (Supabase Auth email/password), with a "keep me signed in on this device" option. | — |
+| `/login` | Sign-in (Supabase Auth email/password), with a "keep me signed in on this device" option. | — |
+| `/register` | Self-registration (email/password/name). New accounts land as **pending** — unusable until an owner approves them. | — |
+| `/admin` | Approval panel: list pending signups, approve at clearance 1 or 2, reject, or revoke an existing account. | **Owner (clearance 1) only.** |
 
-Any signed-out visit to `/inventory` or `/transactions` redirects to `/login`; a signed-in but non-manager account sees a plain "manager account required" message instead of the page (see `src/components/RequireManager.tsx`). Checkout itself never requires a login.
+Any signed-out visit to `/inventory`, `/transactions`, or `/admin` redirects to `/login`; a signed-in account that's still pending approval sees an "awaiting approval" message, and a signed-in but under-privileged account (e.g. a clearance-2 manager visiting `/admin`) sees a plain "you don't have access" message instead of the page (see `src/components/RequireClearance.tsx`, which takes a `min={1|2}` prop). Checkout itself never requires a login.
 
 **New dependency:** Tailwind CSS (`tailwindcss`, `postcss`, `autoprefixer` — already added to `package.json`'s devDependencies). Re-run `npm install` after pulling these files to pick it up, then `npm run dev` as before — the frontend is served from the same Next.js app as the API, no separate process.
 
 Client-side image compression is implemented (`src/lib/image.ts`) — photos are resized/re-encoded toward ~1.5MB before upload, addressing PRD 7's Wi-Fi/cellular latency requirement; the server's 2MB cap (`src/lib/storage.ts`) is the backstop, not the primary control.
 
-## 6. Manager login & roles
+## 6. Registration, approval & clearance levels (2026-09-24)
 
-Only managers/admins can sign in and reach `/inventory` or `/transactions`; floor workers use `/checkout` with no account at all.
+Only approved managers/owners can sign in and reach `/inventory`, `/transactions`, or `/admin`; floor workers use `/checkout` with no account at all.
 
-1. In the Supabase dashboard: **Authentication → Users → Add user**, create an email/password account for each manager.
-2. Open that user and edit **App Metadata** (not "User Metadata" — that field is user-editable and never trusted for authorization) to:
-   ```json
-   { "role": "manager" }
-   ```
-3. That manager can now sign in at `/login`. Checking "keep me signed in on this device" stores the session in `localStorage` (survives closing the browser); leaving it unchecked uses `sessionStorage` (cleared when the tab/browser closes).
-4. Server-side enforcement lives in `requireManager()` (`src/lib/auth.ts`) and is applied to every catalog-write and stock-scan route — the frontend's `RequireManager` gate is UX only, not the real security boundary.
+**Clearance levels:**
+- **1 — dev/owner.** Full manager-level access, plus `/admin` (approve/reject signups, promote/demote, revoke access).
+- **2 — manager.** Catalog + stock-adjustment + transactions access, same as before. No `/admin` access.
 
-There's no self-serve signup or invite flow; new managers are always created via the Supabase dashboard.
+**How it works:**
+1. Anyone can self-register at `/register` (name, email, password). This creates a real Supabase Auth user immediately, but tagged `app_metadata: { "status": "pending" }` — they can technically sign in, but every gated page/route treats a non-`approved` account as unauthorized, so they'll just see an "awaiting approval" message.
+2. An owner opens `/admin`, sees the pending signup, and clicks **Approve as level 1** or **Approve as level 2**. This sets `app_metadata: { "status": "approved", "clearance": 1 | 2 }` via the Supabase service-role key (never client-editable `user_metadata`, which the signed-in user could tamper with).
+3. The approved account can now sign in at `/login` and immediately has the access their clearance level grants. Checking "keep me signed in on this device" stores the session in `localStorage` (survives closing the browser); leaving it unchecked uses `sessionStorage` (cleared when the tab/browser closes).
+4. From `/admin`, an owner can also change an already-approved account's clearance level, or **Revoke access** (deletes the Supabase Auth user outright — used for both rejecting a pending signup and removing someone's access later). An owner can't revoke their own account from the UI.
+
+Server-side enforcement lives in `requireManager()` (clearance 1 or 2) and `requireOwner()` (clearance 1 only) in `src/lib/auth.ts`, applied to every catalog-write, stock-scan, and admin route — the frontend's `RequireClearance` gate is UX only, not the real security boundary.
+
+**Bootstrapping the very first owner:** `/admin` itself requires an existing owner to approve anyone, including the first one — a chicken-and-egg problem the in-app flow can't solve on its own. Register your own account at `/register` once, then run:
+```bash
+node scripts/bootstrap-owner.mjs you@example.com
+```
+This reads `SUPABASE_SERVICE_ROLE_KEY` straight from `.env.local` and approves that one account as clearance 1 — no dashboard hunting required (the Studio dashboard doesn't currently expose a straightforward `app_metadata` editor on the Users page). After that, every future approval (including additional owners) can happen entirely from `/admin`.
 
 ### AI stock intake (manager-only, photo → catalog)
 
@@ -145,11 +167,17 @@ From `/inventory`, "📷 Scan stock photo" uploads a photo of a shelf/box to `PO
 
 **Nothing is written by the scan itself.** The manager reviews every row — editable name/quantity/category/SKU/aliases, and a toggle between "add to existing item" (submits a `RESTOCK` adjustment) and "create new item" (submits a new catalog entry) — and only rows they keep checked are saved, via the same `POST /api/items` / `PATCH /api/items/[id]` endpoints the manual "Add item" and "Adjust stock" forms use. This matches the PRD's requirement that AI suggestions are always manager-reviewed before anything changes the live catalog.
 
-## 7. Thai/English UI
+## 7. Checkout aids: Burmese name transliteration & face check
+
+Two small AI-assisted aids on `/checkout`, both advisory only — neither ever blocks a checkout (PRD 7 — fault tolerance). Both run on `GEMINI_LITE_MODEL` (default `gemini-3.5-flash-lite`), not the full `GEMINI_MODEL` used for checkout item-extraction and stock-scan — those need the accuracy the PRD targets, these two are simple classification/yes-a-face-or-no calls that don't, so they're cheaper and faster on the lite tier instead:
+
+- **Burmese → Thai name transliteration.** Many floor workers are Burmese migrant workers; the tool-room operator often can't read a name typed in Burmese script, or pronounce a romanized one ("Aung Zaw"). Tapping "ถอดเป็นไทย" / "To Thai" next to the worker-name field calls Gemini (`transliterateWorkerName()` in `src/lib/gemini.ts`, via `/api/checkout/translate-name`), which decides whether the text looks like a Burmese name and — if so — offers a readable Thai-script phonetic rendering (pronunciation, not meaning) as a tappable suggestion. Nothing changes automatically; the operator accepts or ignores it, and the accepted text just becomes the normal `worker_name` — no new schema.
+- **Worker-photo face check.** Right after the operator captures the worker photo, `PhotoCapture` (with `checkFace` — only used on `/checkout`, not the shelf-photo scan in `/inventory`) runs a quick background check (`checkPhotoHasFace()`, via `/api/checkout/verify-photo`) for whether a human face is visible, and shows a small badge ("✓ Face detected" / "⚠ No face detected — you can still check out"). This is a **capture-quality sanity check only** — catching an accidental photo of the floor or a thumb over the lens — explicitly **not** identity verification or facial recognition against anyone (PRD 8 puts biometric/facial ID out of scope; this never compares against a database). If the check itself fails (AI error, timeout), the badge just doesn't appear — never surfaced as an error.
+
+## 8. Thai/English UI
 
 The UI ships with a small built-in i18n layer (`src/lib/i18n/`), no external library. **Thai is the default language**, since most floor workers aren't fluent in English; a ไทย/EN toggle in the top nav switches languages instantly and remembers the choice per-browser (`localStorage`). All checkout, login, inventory, stock-scan, and transactions copy is translated — add new UI text by adding a key to both the `th` and `en` blocks in `src/lib/i18n/dictionary.ts` and calling `t('your.key')` from `useI18n()`.
 
 ### Not yet built
 - Badge OCR is delegated entirely to Gemini's vision input during `/api/checkout`, not a separate OCR pipeline — revisit if accuracy on badges specifically needs tuning.
 - Real-time updates (e.g. Supabase Realtime subscriptions so the inventory/transactions views update live across multiple manager devices) — current pages fetch on load/filter-change, not push-updated.
-- No dedicated signup/invite flow for managers; create users via the Supabase dashboard (Authentication → Users) as noted in section 6.

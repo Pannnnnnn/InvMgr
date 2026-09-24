@@ -7,13 +7,14 @@ import { useI18n } from '@/lib/i18n/context';
 
 export function Nav() {
   const pathname = usePathname();
-  const { operatorEmail, signOut, loading } = useAuth();
+  const { operatorEmail, signOut, loading, isOwner, isPending } = useAuth();
   const { t, lang, setLang } = useI18n();
 
   const links = [
     { href: '/checkout', label: t('nav.checkout') },
     { href: '/inventory', label: t('nav.inventory') },
     { href: '/transactions', label: t('nav.transactions') },
+    ...(isOwner ? [{ href: '/admin', label: t('nav.admin') }] : []),
   ];
 
   return (
@@ -58,13 +59,19 @@ export function Nav() {
 
           {loading ? null : operatorEmail ? (
             <>
+              {isPending && (
+                <span className="badge bg-amber-100 text-amber-800">{t('nav.pendingBadge')}</span>
+              )}
               <span className="hidden text-slate-500 sm:inline">{operatorEmail}</span>
               <button onClick={() => signOut()} className="btn-secondary py-1.5 text-sm">
                 {t('nav.signOut')}
               </button>
             </>
           ) : (
-            <Link href="/login" className="btn-secondary py-1.5 text-sm">
+            <Link
+              href="/login"
+              className="btn-primary rounded-full px-4 py-1.5 text-sm font-semibold shadow-sm shadow-brand-600/20"
+            >
               {t('nav.signIn')}
             </Link>
           )}
