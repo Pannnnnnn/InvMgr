@@ -87,3 +87,16 @@ export async function resolveMentions(mentions: ExtractedItemMention[]): Promise
 
   return results;
 }
+
+/**
+ * Raw fuzzy-match candidates for a name, with no auto-accept/reject
+ * thresholding — used by the stock-intake flow (src/lib/gemini.ts's
+ * extractStockFromPhoto + /api/inventory/scan), where a human manager
+ * reviews every suggestion before anything is written, so we'd rather show
+ * a possible match than silently withhold one.
+ */
+export async function suggestCatalogMatches(name: string, limit = 3): Promise<ItemCandidate[]> {
+  const { data, error } = await supabaseAdmin().rpc('search_items', { p_query: name, p_limit: limit });
+  if (error) return [];
+  return (data ?? []) as ItemCandidate[];
+}

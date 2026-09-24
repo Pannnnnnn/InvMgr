@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/supabase';
 import { ApiError, jsonError, ok } from '@/lib/http';
-import { requireOperatorId } from '@/lib/auth';
+import { requireManager } from '@/lib/auth';
 import type { Item } from '@/lib/types';
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -52,7 +52,7 @@ const patchSchema = z.union([fieldPatchSchema, adjustSchema]);
  */
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    await requireOperatorId(req);
+    await requireManager(req);
 
     const body = await req.json().catch(() => {
       throw new ApiError(400, 'INVALID_JSON', 'Request body must be valid JSON.');

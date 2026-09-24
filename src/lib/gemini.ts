@@ -162,3 +162,112 @@ function normalizeExtraction(parsed: unknown): CheckoutExtraction {
           : null,
   };
 }
+
+// --- Stock intake: photo of a shelf/box of items -> suggested catalog entries ---
+
+export type StockDetection = {
+  name: string;
+  quantity: number;
+  category: string | null;
+  suggested_aliases: string[];
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+};
+
+const stockResponseSchema = {
+  type: SchemaType.OBJECT,
+  properties: {
+    detections: {
+      type: SchemaType.ARRAY,
+      items: {
+        type: SchemaType.OBJECT,
+        properties: {
+          name: {
+            type: SchemaType.STRING,
+            description: 'A clear, specific catalog-style name for this tool/item, e.g. "18V Cordless Hammer Drill".',
+          },
+          quantity: { type: SchemaType.INTEGER, description: 'Best-guess count of this item visible in the photo.' },
+          category: {
+            type: SchemaType.STRING,
+            nullable: true,
+            description: 'A short category, e.g. "Power Tools", "Hand Tools", "Safety Gear". Null if unclear.',
+          },
+          suggested_aliases: {
+            type: SchemaType.ARRAY,
+            items: { type: SchemaType.STRING },
+            description: 'Other short names/brand terms someone might use for this item, for fuzzy search matching.',
+          },
+          confidence: { type: SchemaType.STRING, enum: ['HIGH', 'MEDIUM', 'LOW'] },
+        },
+        required: ['name', 'quantity', 'confidence'],
+      },
+    },
+  },
+  required: ['detections'],
+} as const;
+
+const STOCK_SYSTEM_INSTRUCTION = `You are the stock-intake vision step of a factory tool-room inventory system.
+You are given a photo of a shelf, bin, or box of tools/equipment/parts. Identify every distinct kind of
+item visible and estimate how many of each. Group identical items together into one detection with a
+quantity, rather than listing duplicates. Use clear, specific, catalog-style names (not brand slogans).
+If you cannot confidently identify something, still include it with confidence "LOW" rather than omitting
+it — a human will review every suggestion before it's saved, nothing is written automatically. Return an
+empty detections array only if the photo shows no identifiable tools/equipment/parts at all.`;
+
+export async function extractStockFromPhoto(params: {
+  imageBytes: Uint8Array;
+  imageMimeType: string;
+}): Promise<StockDetection[]> {
+  const { imageBytes, imageMimeType } = params;
+
+  const model = client().getGenerativeModel({
+    model: env.geminiModel,
+    systemInstruction: STOCK_SYSTEM_INSTRUCTION,
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: stockResponseSchema,
+      temperature: 0.1,
+    },
+  });
+
+  let result;
+  try {
+    result = await model.generateContent([
+      {
+        inlineData: { data: Buffer.from(imageBytes).toString('base64'), mimeType: imageMimeType },
+      },
+      { text: 'Identify every distinct tool/equipment/part visible and estimate quantities.' },
+    ]);
+  } catch (err) {
+    throw new ApiError(
+      502,
+      'AI_PROVIDER_ERROR',
+      `Gemini request failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  const raw = result.response.text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ApiError(502, 'AI_RESPONSE_UNPARSEABLE', 'Gemini returned non-JSON output.', { raw });
+  }
+
+  const detections = (parsed as { detections?: unknown[] })?.detections;
+  if (!Array.isArray(detections)) return [];
+
+  return detections
+    .filter((d): d is Record<string, unknown> => typeof d === 'object' && d !== null)
+    .map((d) => ({
+      name: typeof d.name === 'string' ? d.name.trim() : '',
+      quantity: Number.isFinite(d.quantity) && (d.quantity as number) > 0 ? Math.floor(d.quantity as number) : 1,
+      category: typeof d.category === 'string' && d.category.trim() ? d.category.trim() : null,
+      suggested_aliases: Array.isArray(d.suggested_aliases)
+        ? (d.suggested_aliases as unknown[]).filter((a): a is string => typeof a === 'string')
+        : [],
+      confidence: (d.confidence === 'HIGH' || d.confidence === 'MEDIUM' || d.confidence === 'LOW'
+        ? d.confidence
+        : 'LOW') as 'HIGH' | 'MEDIUM' | 'LOW',
+    }))
+    .filter((d) => d.name.length > 0);
+}

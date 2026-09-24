@@ -1,8 +1,12 @@
-# FactoryLens — backend
+# FactoryLens
 
-AI Inventory Checkout Agent backend (see PRD). Next.js 14 App Router API
-routes + Supabase (Postgres/Storage/Auth) + Gemini multimodal for
-photo+text checkout parsing. No frontend UI yet — this is the API layer.
+AI Inventory Checkout Agent (see PRD). Next.js 14 App Router — API routes
++ Supabase (Postgres/Storage/Auth) + Gemini multimodal for photo+text
+checkout parsing and photo-based stock intake, plus a Tailwind CSS frontend
+(camera checkout, item picker, manager-only inventory management with AI
+stock scanning, transaction log). Thai/English UI, Thai as the default
+language for floor workers. See section 5 for the frontend routes and
+section 6 for the manager login/role setup.
 
 ## 1. Set up Supabase (cloud)
 
@@ -20,9 +24,9 @@ photo+text checkout parsing. No frontend UI yet — this is the API layer.
      Settings → Database → Connection string → URI> npm run db:migrate`
 4. Optionally load `supabase/seed.sql` (SQL Editor) for a few sample
    catalog items to test checkout against.
-5. Create at least one operator user in Supabase Auth (Dashboard →
-   Authentication → Users) — API calls that require auth expect a Supabase
-   Auth access token in `Authorization: Bearer <token>`.
+5. Create at least one **manager** user in Supabase Auth and tag them as a
+   manager — see section 6, this is required before `/inventory` or
+   `/transactions` will work for anyone.
 
 ## 2. Install & run
 
@@ -52,7 +56,8 @@ npm run dev
 | `/api/items/[id]` | PATCH | Edit metadata, or `{ "adjust": {...} }` for restock/breakage/loss/correction |
 | `/api/transactions` | GET | Audit log (filter by worker, item, status, date range) |
 | `/api/transactions/[id]/return` | POST | Mark a BORROWED transaction RETURNED, restock the item |
-| `/api/transactions/manual` | POST | 1-tap manual checkout drawer — bypasses Gemini entirely (PRD 7 fault tolerance) |
+| `/api/transactions/manual` | POST | Tap-to-pick checkout (no Gemini call) — same atomic commit path as `/api/checkout` |
+| `/api/inventory/scan` | POST | **Manager-only.** Photo of shelf/stock → Gemini-detected items + fuzzy-matched catalog candidates. Nothing is written — see section 6. |
 
 ### `/api/checkout` request
 
@@ -103,8 +108,48 @@ Responses (all `200`, except a successful commit which is `201`):
   only decrement when enough stock exists — safe even under concurrent
   requests.
 
-## 5. Not yet built
+## 5. Frontend
 
-- Frontend (camera capture UI, chat interface, dashboard, manual drawer UI) — this session was backend-only per request.
-- Client-side image compression (PRD 7 names this as a frontend responsibility; the backend enforces a 2MB upload ceiling as a backstop).
-- Badge OCR is delegated to Gemini's vision input, not a separate OCR pipeline — revisit if accuracy on badges specifically needs tuning.
+A Next.js App Router frontend sits on top of the API:
+
+| Route | Purpose | Auth |
+|---|---|---|
+| `/checkout` | Floor checkout: worker photo + either tap-to-pick from the catalog or describe-to-AI (text). Home page redirects here. | None — floor workers never log in (PRD 7 fault tolerance). |
+| `/inventory` | Catalog view — search, add items, manual stock overrides (restock/breakage/loss/correction), AI stock-photo scan. | **Manager only.** |
+| `/transactions` | Audit log — filter by worker/item/status/date, photo thumbnails via signed URLs, mark-returned action. | **Manager only.** |
+| `/login` | Manager sign-in (Supabase Auth email/password), with a "keep me signed in on this device" option. | — |
+
+Any signed-out visit to `/inventory` or `/transactions` redirects to `/login`; a signed-in but non-manager account sees a plain "manager account required" message instead of the page (see `src/components/RequireManager.tsx`). Checkout itself never requires a login.
+
+**New dependency:** Tailwind CSS (`tailwindcss`, `postcss`, `autoprefixer` — already added to `package.json`'s devDependencies). Re-run `npm install` after pulling these files to pick it up, then `npm run dev` as before — the frontend is served from the same Next.js app as the API, no separate process.
+
+Client-side image compression is implemented (`src/lib/image.ts`) — photos are resized/re-encoded toward ~1.5MB before upload, addressing PRD 7's Wi-Fi/cellular latency requirement; the server's 2MB cap (`src/lib/storage.ts`) is the backstop, not the primary control.
+
+## 6. Manager login & roles
+
+Only managers/admins can sign in and reach `/inventory` or `/transactions`; floor workers use `/checkout` with no account at all.
+
+1. In the Supabase dashboard: **Authentication → Users → Add user**, create an email/password account for each manager.
+2. Open that user and edit **App Metadata** (not "User Metadata" — that field is user-editable and never trusted for authorization) to:
+   ```json
+   { "role": "manager" }
+   ```
+3. That manager can now sign in at `/login`. Checking "keep me signed in on this device" stores the session in `localStorage` (survives closing the browser); leaving it unchecked uses `sessionStorage` (cleared when the tab/browser closes).
+4. Server-side enforcement lives in `requireManager()` (`src/lib/auth.ts`) and is applied to every catalog-write and stock-scan route — the frontend's `RequireManager` gate is UX only, not the real security boundary.
+
+There's no self-serve signup or invite flow; new managers are always created via the Supabase dashboard.
+
+### AI stock intake (manager-only, photo → catalog)
+
+From `/inventory`, "📷 Scan stock photo" uploads a photo of a shelf/box to `POST /api/inventory/scan`. Gemini identifies each distinct item and an estimated quantity; each detection is then fuzzy-matched against the existing catalog (same `search_items` trigram RPC used by checkout) so the review screen can suggest "this looks like an existing item" vs. "this looks new."
+
+**Nothing is written by the scan itself.** The manager reviews every row — editable name/quantity/category/SKU/aliases, and a toggle between "add to existing item" (submits a `RESTOCK` adjustment) and "create new item" (submits a new catalog entry) — and only rows they keep checked are saved, via the same `POST /api/items` / `PATCH /api/items/[id]` endpoints the manual "Add item" and "Adjust stock" forms use. This matches the PRD's requirement that AI suggestions are always manager-reviewed before anything changes the live catalog.
+
+## 7. Thai/English UI
+
+The UI ships with a small built-in i18n layer (`src/lib/i18n/`), no external library. **Thai is the default language**, since most floor workers aren't fluent in English; a ไทย/EN toggle in the top nav switches languages instantly and remembers the choice per-browser (`localStorage`). All checkout, login, inventory, stock-scan, and transactions copy is translated — add new UI text by adding a key to both the `th` and `en` blocks in `src/lib/i18n/dictionary.ts` and calling `t('your.key')` from `useI18n()`.
+
+### Not yet built
+- Badge OCR is delegated entirely to Gemini's vision input during `/api/checkout`, not a separate OCR pipeline — revisit if accuracy on badges specifically needs tuning.
+- Real-time updates (e.g. Supabase Realtime subscriptions so the inventory/transactions views update live across multiple manager devices) — current pages fetch on load/filter-change, not push-updated.
+- No dedicated signup/invite flow for managers; create users via the Supabase dashboard (Authentication → Users) as noted in section 6.

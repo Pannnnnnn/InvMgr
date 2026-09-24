@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/supabase';
 import { ApiError, jsonError, ok } from '@/lib/http';
-import { requireOperatorId } from '@/lib/auth';
+import { requireManager } from '@/lib/auth';
 
 /**
  * GET /api/items?search=&category=&limit=&offset=
@@ -48,13 +48,11 @@ const createItemSchema = z.object({
 });
 
 /**
- * POST /api/items — add a new catalog item.
- * Requires an authenticated operator (auth.users). Unlike checkout, this is
- * not on the counter's critical path, so it's fine to require auth here.
+ * POST /api/items — add a new catalog item. Manager-only.
  */
 export async function POST(req: NextRequest) {
   try {
-    await requireOperatorId(req);
+    await requireManager(req);
 
     const body = await req.json().catch(() => {
       throw new ApiError(400, 'INVALID_JSON', 'Request body must be valid JSON.');

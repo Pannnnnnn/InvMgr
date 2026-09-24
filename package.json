@@ -1,8 +1,8 @@
 {
-  "name": "factorylens-backend",
+  "name": "factorylens",
   "version": "0.1.0",
   "private": true,
-  "description": "AI Inventory Checkout Agent (FactoryLens) - backend",
+  "description": "AI Inventory Checkout Agent (FactoryLens)",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -23,7 +23,10 @@
     "@types/node": "^20.14.15",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
     "pg": "^8.13.0",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
     "typescript": "^5.5.4"
   },
   "engines": {
