@@ -33,16 +33,19 @@ function InventoryContent() {
   const [scanOpen, setScanOpen] = useState(false);
   const [adjustItem, setAdjustItem] = useState<Item | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Archived items are opt-in only — the default view stays exactly like a
+  // normal editable catalog list. Toggling this on reveals them (dimmed,
+  // with a restore action); checkout's item picker never sees them either way.
+  const [showArchived, setShowArchived] = useState(false);
 
-  async function load() {
+  async function load(includeArchived: boolean) {
     setLoading(true);
     try {
-      // includeInactive=true so archived items still show up here (dimmed,
-      // with a restore action) instead of just vanishing — checkout's item
-      // picker is the one that should never see them.
-      const params = new URLSearchParams({ includeInactive: 'true' });
+      const params = new URLSearchParams();
+      if (includeArchived) params.set('includeInactive', 'true');
       if (search) params.set('search', search);
-      const data = await apiGet<{ items: Item[] }>(`/api/items?${params.toString()}`, accessToken);
+      const qs = params.toString();
+      const data = await apiGet<{ items: Item[] }>(`/api/items${qs ? `?${qs}` : ''}`, accessToken);
       setItems(data.items);
     } finally {
       setLoading(false);
@@ -50,10 +53,10 @@ function InventoryContent() {
   }
 
   useEffect(() => {
-    const handle = setTimeout(load, 200);
+    const handle = setTimeout(() => load(showArchived), 200);
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
+  }, [search, showArchived]);
 
   function replaceItem(updated: Item) {
     setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
@@ -72,7 +75,14 @@ function InventoryContent() {
       if (res.deleted) {
         setItems((prev) => prev.filter((it) => it.id !== item.id));
       } else if (res.archived && res.item) {
-        replaceItem(res.item);
+        // Archived items only belong in the list when "show archived" is on
+        // — otherwise this would leave a dimmed, un-deletable row sitting in
+        // what's supposed to be a plain, always-editable catalog view.
+        if (showArchived) {
+          replaceItem(res.item);
+        } else {
+          setItems((prev) => prev.filter((it) => it.id !== item.id));
+        }
         window.alert(t('inventory.archivedInsteadOfDeleted', { name: item.name }));
       }
     } catch (err) {
@@ -111,12 +121,22 @@ function InventoryContent() {
         </div>
       </div>
 
-      <input
-        className="field-input mb-4"
-        placeholder={t('inventory.searchPlaceholder')}
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <input
+          className="field-input flex-1"
+          placeholder={t('inventory.searchPlaceholder')}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <label className="flex items-center gap-2 whitespace-nowrap text-sm text-slate-500">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+          />
+          {t('inventory.showArchived')}
+        </label>
+      </div>
 
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
@@ -218,7 +238,7 @@ function InventoryContent() {
           onClose={() => setScanOpen(false)}
           onApplied={() => {
             setScanOpen(false);
-            load();
+            load(showArchived);
           }}
         />
       )}

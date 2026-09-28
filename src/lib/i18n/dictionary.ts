@@ -87,6 +87,7 @@ export const dictionary: Record<Lang, Record<string, string>> = {
     'inventory.archivedInsteadOfDeleted':
       '"{name}" มีประวัติการเบิกอยู่ เลยเก็บเป็นถาวรแทนการลบ (ไม่แสดงตอนเบิกของแล้ว แต่ประวัติยังอยู่)',
     'inventory.restore': 'กู้คืน',
+    'inventory.showArchived': 'แสดงรายการที่เก็บถาวร',
     'inventory.actionError': 'ทำรายการไม่สำเร็จ',
     'inventory.noItems': 'ไม่พบอุปกรณ์',
     'inventory.notManagerTitle': 'ต้องใช้บัญชีผู้จัดการ',
@@ -256,6 +257,7 @@ export const dictionary: Record<Lang, Record<string, string>> = {
     'inventory.archivedInsteadOfDeleted':
       '"{name}" has checkout history, so it was archived instead of deleted (hidden from checkout, history kept).',
     'inventory.restore': 'Restore',
+    'inventory.showArchived': 'Show archived items',
     'inventory.actionError': 'That action failed.',
     'inventory.noItems': 'No items found.',
     'inventory.notManagerTitle': 'Manager account required',
