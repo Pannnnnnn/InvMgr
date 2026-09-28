@@ -81,6 +81,13 @@ export const dictionary: Record<Lang, Record<string, string>> = {
     'inventory.category': 'หมวดหมู่',
     'inventory.availableTotal': 'คงเหลือ / ทั้งหมด',
     'inventory.adjust': 'ปรับสต็อก',
+    'inventory.delete': 'ลบ',
+    'inventory.deleteConfirm': 'ลบ "{name}" ออกจากคลังสินค้า?',
+    'inventory.archivedBadge': 'เก็บถาวรแล้ว',
+    'inventory.archivedInsteadOfDeleted':
+      '"{name}" มีประวัติการเบิกอยู่ เลยเก็บเป็นถาวรแทนการลบ (ไม่แสดงตอนเบิกของแล้ว แต่ประวัติยังอยู่)',
+    'inventory.restore': 'กู้คืน',
+    'inventory.actionError': 'ทำรายการไม่สำเร็จ',
     'inventory.noItems': 'ไม่พบอุปกรณ์',
     'inventory.notManagerTitle': 'ต้องใช้บัญชีผู้จัดการ',
     'inventory.notManagerBody':
@@ -243,6 +250,13 @@ export const dictionary: Record<Lang, Record<string, string>> = {
     'inventory.category': 'Category',
     'inventory.availableTotal': 'Available / Total',
     'inventory.adjust': 'Adjust',
+    'inventory.delete': 'Delete',
+    'inventory.deleteConfirm': 'Delete "{name}" from the catalog?',
+    'inventory.archivedBadge': 'Archived',
+    'inventory.archivedInsteadOfDeleted':
+      '"{name}" has checkout history, so it was archived instead of deleted (hidden from checkout, history kept).',
+    'inventory.restore': 'Restore',
+    'inventory.actionError': 'That action failed.',
     'inventory.noItems': 'No items found.',
     'inventory.notManagerTitle': 'Manager account required',
     'inventory.notManagerBody':

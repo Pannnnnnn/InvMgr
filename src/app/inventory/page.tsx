@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { apiGet } from '@/lib/api-client';
+import { apiGet, apiJson } from '@/lib/api-client';
 import type { Item } from '@/lib/checkout-types';
 import { AddItemModal } from '@/components/AddItemModal';
 import { StockAdjustModal } from '@/components/StockAdjustModal';
 import { RequireClearance } from '@/components/RequireClearance';
 import { StockScanModal } from '@/components/StockScanModal';
 import { useI18n } from '@/lib/i18n/context';
+import { useAuth } from '@/lib/auth-context';
 
 /**
  * Real-time inventory catalog view (PRD 4.2): name, SKU, category,
@@ -24,19 +25,24 @@ export default function InventoryPage() {
 
 function InventoryContent() {
   const { t } = useI18n();
+  const { accessToken } = useAuth();
   const [items, setItems] = useState<Item[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
   const [adjustItem, setAdjustItem] = useState<Item | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
     try {
-      const data = await apiGet<{ items: Item[] }>(
-        `/api/items${search ? `?search=${encodeURIComponent(search)}` : ''}`
-      );
+      // includeInactive=true so archived items still show up here (dimmed,
+      // with a restore action) instead of just vanishing — checkout's item
+      // picker is the one that should never see them.
+      const params = new URLSearchParams({ includeInactive: 'true' });
+      if (search) params.set('search', search);
+      const data = await apiGet<{ items: Item[] }>(`/api/items?${params.toString()}`, accessToken);
       setItems(data.items);
     } finally {
       setLoading(false);
@@ -51,6 +57,41 @@ function InventoryContent() {
 
   function replaceItem(updated: Item) {
     setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
+  }
+
+  async function handleDelete(item: Item) {
+    if (!window.confirm(t('inventory.deleteConfirm', { name: item.name }))) return;
+    setBusyId(item.id);
+    try {
+      const res = await apiJson<{ deleted: boolean; archived: boolean; item?: Item }>(
+        `/api/items/${item.id}`,
+        'DELETE',
+        {},
+        accessToken
+      );
+      if (res.deleted) {
+        setItems((prev) => prev.filter((it) => it.id !== item.id));
+      } else if (res.archived && res.item) {
+        replaceItem(res.item);
+        window.alert(t('inventory.archivedInsteadOfDeleted', { name: item.name }));
+      }
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : t('inventory.actionError'));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleRestore(item: Item) {
+    setBusyId(item.id);
+    try {
+      const res = await apiJson<{ item: Item }>(`/api/items/${item.id}`, 'PATCH', { is_active: true }, accessToken);
+      replaceItem(res.item);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : t('inventory.actionError'));
+    } finally {
+      setBusyId(null);
+    }
   }
 
   return (
@@ -103,8 +144,16 @@ function InventoryContent() {
               </tr>
             ) : (
               items.map((item) => (
-                <tr key={item.id} className="border-b border-slate-100 last:border-0">
-                  <td className="px-4 py-3 font-medium text-slate-800">{item.name}</td>
+                <tr
+                  key={item.id}
+                  className={`border-b border-slate-100 last:border-0 ${!item.is_active ? 'opacity-50' : ''}`}
+                >
+                  <td className="px-4 py-3 font-medium text-slate-800">
+                    {item.name}
+                    {!item.is_active && (
+                      <span className="badge ml-2 bg-slate-200 text-slate-600">{t('inventory.archivedBadge')}</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-slate-500">{item.sku}</td>
                   <td className="px-4 py-3 text-slate-500">{item.category ?? '—'}</td>
                   <td className="px-4 py-3">
@@ -120,13 +169,33 @@ function InventoryContent() {
                       {item.available_quantity} / {item.total_quantity}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      className="text-xs font-medium text-brand-600 hover:underline"
-                      onClick={() => setAdjustItem(item)}
-                    >
-                      {t('inventory.adjust')}
-                    </button>
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    {item.is_active ? (
+                      <>
+                        <button
+                          className="text-xs font-medium text-brand-600 hover:underline disabled:opacity-50"
+                          disabled={busyId === item.id}
+                          onClick={() => setAdjustItem(item)}
+                        >
+                          {t('inventory.adjust')}
+                        </button>
+                        <button
+                          className="ml-3 text-xs font-medium text-red-600 hover:underline disabled:opacity-50"
+                          disabled={busyId === item.id}
+                          onClick={() => handleDelete(item)}
+                        >
+                          {t('inventory.delete')}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="text-xs font-medium text-brand-600 hover:underline disabled:opacity-50"
+                        disabled={busyId === item.id}
+                        onClick={() => handleRestore(item)}
+                      >
+                        {t('inventory.restore')}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))

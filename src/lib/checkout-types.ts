@@ -74,6 +74,7 @@ export type Item = {
   aliases: string[];
   total_quantity: number;
   available_quantity: number;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
 };

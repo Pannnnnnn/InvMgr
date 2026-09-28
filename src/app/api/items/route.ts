@@ -5,15 +5,19 @@ import { ApiError, jsonError, ok } from '@/lib/http';
 import { requireManager } from '@/lib/auth';
 
 /**
- * GET /api/items?search=&category=&limit=&offset=
+ * GET /api/items?search=&category=&limit=&offset=&includeInactive=
  * Real-time inventory catalog view (PRD 4.2): name, SKU, category, available
  * vs total quantity. `search` does a fuzzy match against name + aliases.
+ * Archived items (is_active = false, see 0006_item_archive.sql) are hidden
+ * by default — pass includeInactive=true (used by the inventory management
+ * page, never the checkout item picker) to also list them.
  */
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const search = searchParams.get('search')?.trim();
     const category = searchParams.get('category')?.trim();
+    const includeInactive = searchParams.get('includeInactive') === 'true';
     const limit = clampInt(searchParams.get('limit'), 50, 1, 200);
     const offset = clampInt(searchParams.get('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
 
@@ -23,6 +27,7 @@ export async function GET(req: NextRequest) {
       .order('name', { ascending: true })
       .range(offset, offset + limit - 1);
 
+    if (!includeInactive) query = query.eq('is_active', true);
     if (category) query = query.eq('category', category);
     if (search) {
       // Match on name or any alias (aliases stored as text[]).

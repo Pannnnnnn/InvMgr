@@ -26,6 +26,9 @@ const fieldPatchSchema = z
     name: z.string().min(1).optional(),
     category: z.string().trim().min(1).nullable().optional(),
     aliases: z.array(z.string().min(1)).optional(),
+    // Restoring an archived item (see DELETE below) reuses this same patch
+    // path: { is_active: true }.
+    is_active: z.boolean().optional(),
   })
   .strict();
 
@@ -86,6 +89,57 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     return ok({ item: data });
+  } catch (err) {
+    return jsonError(err);
+  }
+}
+
+/**
+ * DELETE /api/items/[id] — remove a catalog item. Manager-only.
+ *
+ * transactions.item_id is ON DELETE RESTRICT (see 0001_init.sql), so an item
+ * that has ever been checked out/restocked can't be hard-deleted without
+ * losing (or orphaning) its audit trail. This route tries a real delete
+ * first — a placeholder item with no history is removed outright — and only
+ * falls back to archiving (is_active = false, see 0006_item_archive.sql)
+ * when the DB rejects that with the FK-restrict violation. Archived items
+ * drop out of search/checkout/the default inventory list but keep their
+ * transaction history intact; they can be restored via
+ * PATCH { is_active: true }.
+ */
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    await requireManager(req);
+
+    const { data: existing, error: fetchErr } = await supabaseAdmin()
+      .from('items')
+      .select('id')
+      .eq('id', params.id)
+      .single();
+    if (fetchErr || !existing) throw new ApiError(404, 'ITEM_NOT_FOUND', `No item with id ${params.id}.`);
+
+    const { error: deleteErr } = await supabaseAdmin().from('items').delete().eq('id', params.id);
+
+    if (!deleteErr) {
+      return ok({ deleted: true, archived: false });
+    }
+
+    if (deleteErr.code === '23503') {
+      const { data: archived, error: archiveErr } = await supabaseAdmin()
+        .from('items')
+        .update({ is_active: false })
+        .eq('id', params.id)
+        .select('*')
+        .single();
+
+      if (archiveErr || !archived) {
+        throw new ApiError(500, 'DB_ERROR', archiveErr?.message ?? 'Failed to archive item.');
+      }
+
+      return ok({ deleted: false, archived: true, item: archived });
+    }
+
+    throw new ApiError(500, 'DB_ERROR', deleteErr.message);
   } catch (err) {
     return jsonError(err);
   }
