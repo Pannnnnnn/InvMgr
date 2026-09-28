@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/supabase';
 import { ApiError, jsonError, ok } from '@/lib/http';
 import { requireManager } from '@/lib/auth';
+import { suggestSku } from '@/lib/slugify';
 
 /**
  * GET /api/items?search=&category=&limit=&offset=&includeInactive=
@@ -44,7 +45,11 @@ export async function GET(req: NextRequest) {
 }
 
 const createItemSchema = z.object({
-  sku: z.string().min(1),
+  // SKU is an internal catalog identifier (still unique/not-null in the DB
+  // per the PRD schema), but managers found typing one for every item
+  // pointless friction. It's now optional here and auto-generated
+  // server-side from the item name when omitted — see createWithAutoSku().
+  sku: z.string().min(1).optional(),
   name: z.string().min(1),
   category: z.string().trim().min(1).nullable().optional(),
   aliases: z.array(z.string().min(1)).default([]),
@@ -73,30 +78,72 @@ export async function POST(req: NextRequest) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'available_quantity cannot exceed total_quantity.');
     }
 
-    const { data, error } = await supabaseAdmin()
-      .from('items')
-      .insert({
-        sku: input.sku,
-        name: input.name,
-        category: input.category ?? null,
-        aliases: input.aliases,
-        total_quantity: input.total_quantity,
-        available_quantity: available,
-      })
-      .select('*')
-      .single();
-
-    if (error) {
-      if (error.code === '23505') {
-        throw new ApiError(409, 'DUPLICATE_SKU', `An item with SKU "${input.sku}" already exists.`);
-      }
-      throw new ApiError(500, 'DB_ERROR', error.message);
-    }
+    const data = await createWithAutoSku({
+      sku: input.sku,
+      name: input.name,
+      category: input.category ?? null,
+      aliases: input.aliases,
+      total_quantity: input.total_quantity,
+      available_quantity: available,
+    });
 
     return ok({ item: data }, { status: 201 });
   } catch (err) {
     return jsonError(err);
   }
+}
+
+/**
+ * Inserts an item, generating a fresh auto-SKU (name-based slug + random
+ * suffix, see src/lib/slugify.ts) on every attempt that a caller didn't
+ * supply one. Retries a few times on a SKU collision (23505) — vanishingly
+ * unlikely with the random suffix, but the DB's UNIQUE constraint is the
+ * real guarantee, not the odds.
+ */
+async function createWithAutoSku(input: {
+  sku?: string;
+  name: string;
+  category: string | null;
+  aliases: string[];
+  total_quantity: number;
+  available_quantity: number;
+}) {
+  const MAX_ATTEMPTS = 5;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const sku = input.sku ?? suggestSku(input.name);
+    const { data, error } = await supabaseAdmin()
+      .from('items')
+      .insert({
+        sku,
+        name: input.name,
+        category: input.category,
+        aliases: input.aliases,
+        total_quantity: input.total_quantity,
+        available_quantity: input.available_quantity,
+        // Explicit, not left to the column default: a brand-new item must
+        // never come back archived. (Reported bug: newly added items were
+        // showing up archived immediately — this removes any dependency on
+        // the DB column default actually being set correctly.)
+        is_active: true,
+      })
+      .select('*')
+      .single();
+
+    if (!error) return data;
+
+    if (error.code === '23505') {
+      if (input.sku) {
+        // The caller explicitly requested this SKU — don't silently retry
+        // with a different one, surface the conflict instead.
+        throw new ApiError(409, 'DUPLICATE_SKU', `An item with SKU "${input.sku}" already exists.`);
+      }
+      continue; // auto-generated SKU collided; try again with a new one
+    }
+
+    throw new ApiError(500, 'DB_ERROR', error.message);
+  }
+
+  throw new ApiError(500, 'DB_ERROR', 'Could not generate a unique SKU after several attempts.');
 }
 
 function clampInt(raw: string | null, fallback: number, min: number, max: number): number {

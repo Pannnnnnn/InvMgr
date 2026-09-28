@@ -11,9 +11,14 @@ import { useI18n } from '@/lib/i18n/context';
 import { useAuth } from '@/lib/auth-context';
 
 /**
- * Real-time inventory catalog view (PRD 4.2): name, SKU, category,
- * available vs total quantity, with fast-action manual overrides for
- * breakage/loss/restocking. Manager-only (see RequireClearance).
+ * Real-time inventory catalog view (PRD 4.2): name, category, available vs
+ * total quantity, with fast-action manual overrides for breakage/loss/
+ * restocking. Manager-only (see RequireClearance).
+ *
+ * SKU is still generated and stored under the hood (unique catalog
+ * identifier, matches the PRD data model) but is no longer manager-facing —
+ * typing one for every item was pure friction with no payoff for this
+ * workflow, so POST /api/items auto-generates it from the item name.
  */
 export default function InventoryPage() {
   return (
@@ -143,7 +148,6 @@ function InventoryContent() {
           <thead>
             <tr className="border-b border-slate-200 text-left text-slate-500">
               <th className="px-4 py-3 font-medium">{t('inventory.name')}</th>
-              <th className="px-4 py-3 font-medium">{t('inventory.sku')}</th>
               <th className="px-4 py-3 font-medium">{t('inventory.category')}</th>
               <th className="px-4 py-3 font-medium">{t('inventory.availableTotal')}</th>
               <th className="px-4 py-3" />
@@ -152,13 +156,13 @@ function InventoryContent() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-slate-400">
+                <td colSpan={4} className="px-4 py-6 text-center text-slate-400">
                   {t('common.loading')}
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-slate-400">
+                <td colSpan={4} className="px-4 py-6 text-center text-slate-400">
                   {t('inventory.noItems')}
                 </td>
               </tr>
@@ -174,7 +178,6 @@ function InventoryContent() {
                       <span className="badge ml-2 bg-slate-200 text-slate-600">{t('inventory.archivedBadge')}</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-slate-500">{item.sku}</td>
                   <td className="px-4 py-3 text-slate-500">{item.category ?? '—'}</td>
                   <td className="px-4 py-3">
                     <span

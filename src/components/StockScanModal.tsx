@@ -6,10 +6,8 @@ import { apiForm, apiJson, ClientApiError } from '@/lib/api-client';
 import type { Item, StockScanSuggestion } from '@/lib/checkout-types';
 import { PhotoCapture } from './PhotoCapture';
 import { useI18n } from '@/lib/i18n/context';
-import { suggestSku } from '@/lib/slugify';
 
 type Row = StockScanSuggestion & {
-  sku: string;
   aliasesText: string;
   action: 'new' | 'existing';
   existingId: string | null;
@@ -22,7 +20,6 @@ function toRow(s: StockScanSuggestion): Row {
   const top = s.candidates[0];
   return {
     ...s,
-    sku: suggestSku(s.name),
     aliasesText: s.suggested_aliases.join(', '),
     action: top && top.similarity > 0.5 ? 'existing' : 'new',
     existingId: top && top.similarity > 0.5 ? top.id : null,
@@ -82,7 +79,7 @@ export function StockScanModal(props: { onClose: () => void; onApplied: () => vo
           '/api/items',
           'POST',
           {
-            sku: row.sku,
+            // No sku here — the server auto-generates one from the name.
             name: row.name,
             category: row.category,
             aliases: row.aliasesText
@@ -209,20 +206,12 @@ export function StockScanModal(props: { onClose: () => void; onApplied: () => vo
                   </div>
 
                   {row.action === 'new' && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <input
-                        className="field-input"
-                        placeholder={t('addItem.sku')}
-                        value={row.sku}
-                        onChange={(e) => updateRow(i, { sku: e.target.value })}
-                      />
-                      <input
-                        className="field-input"
-                        placeholder={t('addItem.aliases')}
-                        value={row.aliasesText}
-                        onChange={(e) => updateRow(i, { aliasesText: e.target.value })}
-                      />
-                    </div>
+                    <input
+                      className="field-input"
+                      placeholder={t('addItem.aliases')}
+                      value={row.aliasesText}
+                      onChange={(e) => updateRow(i, { aliasesText: e.target.value })}
+                    />
                   )}
 
                   {row.status === 'error' && <p className="text-xs text-red-600">{row.errorMsg}</p>}

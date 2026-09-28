@@ -34,7 +34,6 @@ export function ConfirmationCard(props: { workerName: string | null; transaction
             <li key={txn.id} className="flex items-center justify-between text-sm">
               <span className="text-slate-800">
                 {txn.quantity}× {txn.item?.name ?? txn.item_id}
-                {txn.item?.sku && <span className="ml-1 text-slate-400">({txn.item.sku})</span>}
               </span>
               <span className="text-slate-500">{new Date(txn.borrowed_at).toLocaleTimeString()}</span>
             </li>

@@ -10,7 +10,6 @@ export function AddItemModal(props: { onClose: () => void; onCreated: (item: Ite
   const { onClose, onCreated } = props;
   const { accessToken } = useAuth();
   const { t } = useI18n();
-  const [sku, setSku] = useState('');
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
   const [aliases, setAliases] = useState('');
@@ -26,7 +25,8 @@ export function AddItemModal(props: { onClose: () => void; onCreated: (item: Ite
         '/api/items',
         'POST',
         {
-          sku,
+          // No sku here — the server auto-generates one from the name
+          // (see POST /api/items). Managers no longer have to think about it.
           name,
           category: category || null,
           aliases: aliases
@@ -52,12 +52,6 @@ export function AddItemModal(props: { onClose: () => void; onCreated: (item: Ite
         <h2 className="mb-4 text-lg font-semibold">{t('addItem.title')}</h2>
 
         <div className="space-y-3">
-          <div>
-            <label className="field-label" htmlFor="item-sku">
-              {t('addItem.sku')}
-            </label>
-            <input id="item-sku" className="field-input" value={sku} onChange={(e) => setSku(e.target.value)} />
-          </div>
           <div>
             <label className="field-label" htmlFor="item-name">
               {t('addItem.name')}
@@ -111,7 +105,7 @@ export function AddItemModal(props: { onClose: () => void; onCreated: (item: Ite
           <button
             className="btn-primary flex-1"
             onClick={submit}
-            disabled={submitting || !sku.trim() || !name.trim()}
+            disabled={submitting || !name.trim()}
           >
             {submitting ? t('addItem.adding') : t('addItem.add')}
           </button>
